@@ -1,0 +1,15 @@
+services:
+  whatsapp-worker:
+    build:
+      context: .
+    env_file: .env
+    networks:
+      - billy_network
+    restart: unless-stopped
+    volumes:
+      - "~/.billy/whatsapp-worker:/root/storage"
+
+networks:
+  billy_network:
+    driver: bridge
+    external: true
