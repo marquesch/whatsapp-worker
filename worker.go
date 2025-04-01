@@ -111,7 +111,7 @@ func handleSendWhatsappMessage(client *whatsmeow.Client, body []byte) {
 		ExtendedTextMessage: &waE2E.ExtendedTextMessage{
 			Text: proto.String(payload.MessageBody),
 			ContextInfo: &waE2E.ContextInfo{
-				StanzaID: proto.String(payload.QuotedMessageID),
+				StanzaID:    proto.String(payload.QuotedMessageID),
 				Participant: &recipientJIDString,
 			},
 		},
@@ -135,43 +135,44 @@ func initRabbitMQ() *amqp.Channel {
 }
 
 func messageReceiveHandler(evt interface{}) {
-	switch v := evt.(type) {
+	switch evt := evt.(type) {
 	case *events.Message:
-		switch v.Info.Type {
-		case "text":
-			payload := NewReceiveMessagePayload()
-			payload.MessageType = "text"
-			payload.SenderNumber = v.Info.Sender.User
-			payload.MessageId = v.Info.ID
-
-			if v.Message.Conversation != nil {
-				payload.MessageBody = *v.Message.Conversation
-			} else if v.Message.ExtendedTextMessage != nil {
-				payload.MessageBody = v.Message.ExtendedTextMessage.GetText()
-				if v.Message.ExtendedTextMessage.ContextInfo != nil {
-				payload.QuotedMessageID = *v.Message.ExtendedTextMessage.ContextInfo.StanzaID
-			}
-			} else {
-				payload.MessageBody = "[Unsupported message type]"
-			}
-
-			logWithTransaction(payload.TransactionId, "INFO", "Received message from "+payload.SenderNumber)
-
-			msgData, err := json.Marshal(payload)
-			failOnErrorWithTransaction(err, payload.TransactionId)
-
-			err = rabbitMQChannel.Publish(
-				"",
-				receiveMessageQueueName,
-				false,
-				false,
-				amqp.Publishing{
-					ContentType: "application/json",
-					Body:        msgData,
-				},
-			)
-			failOnErrorWithTransaction(err, payload.TransactionId)
+		if evt.Info.IsFromMe || evt.Info.IsGroup || evt.Info.Type != "text" {
+			return
 		}
+
+		payload := NewReceiveMessagePayload()
+		payload.MessageType = "text"
+		payload.SenderNumber = evt.Info.Sender.User
+		payload.MessageId = evt.Info.ID
+
+		if evt.Message.Conversation != nil {
+			payload.MessageBody = *evt.Message.Conversation
+		} else if evt.Message.ExtendedTextMessage != nil {
+			payload.MessageBody = evt.Message.ExtendedTextMessage.GetText()
+			if evt.Message.ExtendedTextMessage.ContextInfo != nil {
+				if evt.Message.ExtendedTextMessage.ContextInfo.StanzaID != nil {
+					payload.QuotedMessageID = *evt.Message.ExtendedTextMessage.ContextInfo.StanzaID
+				}
+			}
+		}
+
+		logWithTransaction(payload.TransactionId, "INFO", "Received message from "+payload.SenderNumber)
+
+		msgData, err := json.Marshal(payload)
+		failOnErrorWithTransaction(err, payload.TransactionId)
+
+		err = rabbitMQChannel.Publish(
+			"",
+			receiveMessageQueueName,
+			false,
+			false,
+			amqp.Publishing{
+				ContentType: "application/json",
+				Body:        msgData,
+			},
+		)
+		failOnErrorWithTransaction(err, payload.TransactionId)
 	}
 }
 
@@ -186,6 +187,7 @@ func main() {
 
 	clientLog := waLog.Stdout("Client", "INFO", true)
 	client := whatsmeow.NewClient(deviceStore, clientLog)
+	client.AutomaticMessageRerequestFromPhone = true
 	client.AddEventHandler(messageReceiveHandler)
 
 	rabbitMQChannel = initRabbitMQ()
