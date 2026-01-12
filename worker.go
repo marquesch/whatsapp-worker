@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
@@ -22,7 +24,7 @@ import (
 )
 
 const (
-	receiveMessageQueueName = "async_task"
+	receiveMessageQueueName = "async_tasks"
 	sendMessageQueueName    = "whatapp_message"
 )
 
@@ -43,25 +45,25 @@ func failOnError(err error, msg string) {
 }
 
 type ProcessMessagePayload struct {
-	Module string `json:"module"`
-	Func string `json:"func"`
+	Module  string                `json:"module"`
+	Func    string                `json:"func"`
 	Payload ReceiveMessagePayload `json:"kwargs"`
 }
 
 type SendMessagePayload struct {
 	PhoneNumber string `json:"phone_number"`
-	MessageBody     string `json:"message_body"`
+	MessageBody string `json:"message_body"`
 }
 
 type ReceiveMessagePayload struct {
-	MessageId       string `json:"message_id"`
-	MessageBody     string `json:"message_body"`
-	PhoneNumber    string `json:"phone_number"`
-	Timestamp string `json:"timestamp"`
+	MessageId   string `json:"message_id"`
+	MessageBody string `json:"message_body"`
+	PhoneNumber string `json:"phone_number"`
+	Timestamp   string `json:"timestamp"`
 }
 
 func NewProcessMessagePayload() *ProcessMessagePayload {
-	return &ProcessMessagePayload{Module: "infrastructure.async_tasks", Func:"process_message"}
+	return &ProcessMessagePayload{Module: "infrastructure.async_tasks", Func: "process_incoming_message"}
 }
 
 func NewSendMessagePayload() *SendMessagePayload {
@@ -69,6 +71,17 @@ func NewSendMessagePayload() *SendMessagePayload {
 }
 
 func setUpRabbitMQConsumer(channel *amqp.Channel) <-chan amqp.Delivery {
+	_, err := channel.QueueDeclare(
+		sendMessageQueueName,
+		true,
+		false,
+		false,
+		false,
+		nil,
+	)
+
+	failOnError(err, "Error declaring queue")
+
 	messages, err := channel.Consume(
 		sendMessageQueueName,
 		"",
@@ -119,7 +132,7 @@ func messageReceiveHandler(evt interface{}) {
 		}
 
 		payload := NewProcessMessagePayload()
-		payload.Payload.PhoneNumber = evt.Info.Sender.User
+		payload.Payload.PhoneNumber = evt.Info.SenderAlt.User
 		payload.Payload.MessageId = evt.Info.ID
 
 		if evt.Message.Conversation != nil {
@@ -127,6 +140,8 @@ func messageReceiveHandler(evt interface{}) {
 		} else if evt.Message.ExtendedTextMessage != nil {
 			payload.Payload.MessageBody = evt.Message.ExtendedTextMessage.GetText()
 		}
+
+		payload.Payload.Timestamp = evt.Info.Timestamp.Format(time.RFC3339)
 
 		msgData, err := json.Marshal(payload)
 		failOnError(err, "Error marshalling payload")
@@ -146,12 +161,13 @@ func messageReceiveHandler(evt interface{}) {
 }
 
 func main() {
+	fmt.Println("starting")
 	dbLog := waLog.Stdout("Database", "DEBUG", true)
 
-	container, err := sqlstore.New("sqlite3", "file:storage/wadb.db?_foreign_keys=on", dbLog)
+	container, err := sqlstore.New(context.Background(), "sqlite3", "file:storage/wadb.db?_foreign_keys=on", dbLog)
 	failOnError(err, "Error creating db container")
 
-	deviceStore, err := container.GetFirstDevice()
+	deviceStore, err := container.GetFirstDevice(context.Background())
 	failOnError(err, "Error getting device")
 
 	clientLog := waLog.Stdout("Client", "INFO", true)
