@@ -25,7 +25,7 @@ import (
 
 const (
 	receiveMessageQueueName = "async_tasks"
-	sendMessageQueueName    = "whatapp_message"
+	sendMessageQueueName    = "whatsapp_message"
 )
 
 var (
@@ -161,7 +161,6 @@ func messageReceiveHandler(evt interface{}) {
 }
 
 func main() {
-	fmt.Println("starting")
 	dbLog := waLog.Stdout("Database", "DEBUG", true)
 
 	container, err := sqlstore.New(context.Background(), "sqlite3", "file:storage/wadb.db?_foreign_keys=on", dbLog)
