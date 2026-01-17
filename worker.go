@@ -45,8 +45,7 @@ func failOnError(err error, msg string) {
 }
 
 type ProcessMessagePayload struct {
-	Module  string                `json:"module"`
-	Func    string                `json:"func"`
+	Task    string                `json:"task"`
 	Payload ReceiveMessagePayload `json:"kwargs"`
 }
 
@@ -63,7 +62,7 @@ type ReceiveMessagePayload struct {
 }
 
 func NewProcessMessagePayload() *ProcessMessagePayload {
-	return &ProcessMessagePayload{Module: "infrastructure.async_tasks", Func: "process_incoming_message"}
+	return &ProcessMessagePayload{Task: "process_incoming_message"}
 }
 
 func NewSendMessagePayload() *SendMessagePayload {
