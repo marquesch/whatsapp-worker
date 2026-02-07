@@ -61,7 +61,7 @@ type ReceiveMessagePayload struct {
 }
 
 func NewProcessMessagePayload() *ProcessMessagePayload {
-	return &ProcessMessagePayload{Task: "process_incoming_message"}
+	return &ProcessMessagePayload{Task: "ProcessIncomingMessage"}
 }
 
 func NewSendMessagePayload() *SendMessagePayload {
