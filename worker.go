@@ -28,10 +28,10 @@ const (
 )
 
 var (
-	amqpHost     = os.Getenv("AMQP_HOST")
-	amqpPort     = os.Getenv("AMQP_PORT")
-	amqpUser     = os.Getenv("AMQP_USER")
-	amqpPassword = os.Getenv("AMQP_PASSWORD")
+	amqpHost     = os.Getenv("RABBITMQ_HOST")
+	amqpPort     = os.Getenv("RABBITMQ_PORT")
+	amqpUser     = os.Getenv("RABBITMQ_USER")
+	amqpPassword = os.Getenv("RABBITMQ_PASSWORD")
 
 	rabbitMQURL     = "amqp://" + amqpUser + ":" + amqpPassword + "@" + amqpHost + ":" + amqpPort + "/"
 	rabbitMQChannel *amqp.Channel
