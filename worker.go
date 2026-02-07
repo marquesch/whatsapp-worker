@@ -16,6 +16,7 @@ import (
 	"go.mau.fi/whatsmeow/types/events"
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
+	"net/url"
 
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/mdp/qrterminal"
@@ -31,7 +32,7 @@ var (
 	amqpHost     = os.Getenv("RABBITMQ_HOST")
 	amqpPort     = os.Getenv("RABBITMQ_PORT")
 	amqpUser     = os.Getenv("RABBITMQ_USER")
-	amqpPassword = os.Getenv("RABBITMQ_PASSWORD")
+	amqpPassword = url.PathEscape(os.Getenv("RABBITMQ_PASSWORD"))
 
 	rabbitMQURL     = "amqp://" + amqpUser + ":" + amqpPassword + "@" + amqpHost + ":" + amqpPort + "/"
 	rabbitMQChannel *amqp.Channel
