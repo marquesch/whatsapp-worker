@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
@@ -16,15 +17,14 @@ import (
 	waLog "go.mau.fi/whatsmeow/util/log"
 	"google.golang.org/protobuf/proto"
 
-	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/mdp/qrterminal"
 	"github.com/streadway/amqp"
 )
 
 const (
-	receiveMessageQueueName = "q.message.receive"
-	sendMessageQueueName    = "q.message.send"
+	receiveMessageQueueName = "async_tasks"
+	sendMessageQueueName    = "whatsapp_message"
 )
 
 var (
@@ -37,53 +37,49 @@ var (
 	rabbitMQChannel *amqp.Channel
 )
 
-func failOnErrorWithTransaction(err error, transactionId string) {
-	if err != nil {
-		logWithTransaction(transactionId, "ERROR", err.Error())
-		panic(err)
-	}
-}
-
-func logWithTransaction(transactionId string, level string, message string) {
-	log.Println(level + ": " + transactionId + " - " + message)
-}
-
 func failOnError(err error, msg string) {
 	if err != nil {
 		log.Fatalf("%s: %s", msg, err)
 	}
 }
 
+type ProcessMessagePayload struct {
+	Task    string                `json:"task"`
+	Payload ReceiveMessagePayload `json:"kwargs"`
+}
+
 type SendMessagePayload struct {
-	MessageType     string `json:"message_type"`
-	QuotedMessageID string `json:"quoted_message_id"`
-	RecipientNumber string `json:"recipient_number"`
-	MessageBody     string `json:"message_body"`
-	TransactionId   string `json:"transaction_id"`
+	PhoneNumber string `json:"phone_number"`
+	MessageBody string `json:"message_body"`
 }
 
 type ReceiveMessagePayload struct {
-	MessageType     string `json:"message_type"`
-	MessageId       string `json:"message_id"`
-	SenderNumber    string `json:"sender_number"`
-	MessageBody     string `json:"message_body"`
-	TransactionId   string `json:"transaction_id"`
-	QuotedMessageID string `json:"quoted_message_id"`
+	MessageId   string `json:"message_id"`
+	MessageBody string `json:"message_body"`
+	PhoneNumber string `json:"phone_number"`
+	Timestamp   string `json:"timestamp"`
 }
 
-func NewReceiveMessagePayload() *ReceiveMessagePayload {
-	return &ReceiveMessagePayload{
-		TransactionId: uuid.New().String(),
-	}
+func NewProcessMessagePayload() *ProcessMessagePayload {
+	return &ProcessMessagePayload{Task: "ProcessIncomingMessage"}
 }
 
 func NewSendMessagePayload() *SendMessagePayload {
-	return &SendMessagePayload{
-		TransactionId: uuid.New().String(),
-	}
+	return &SendMessagePayload{}
 }
 
 func setUpRabbitMQConsumer(channel *amqp.Channel) <-chan amqp.Delivery {
+	_, err := channel.QueueDeclare(
+		sendMessageQueueName,
+		true,
+		false,
+		false,
+		false,
+		nil,
+	)
+
+	failOnError(err, "Error declaring queue")
+
 	messages, err := channel.Consume(
 		sendMessageQueueName,
 		"",
@@ -101,27 +97,19 @@ func setUpRabbitMQConsumer(channel *amqp.Channel) <-chan amqp.Delivery {
 func handleSendWhatsappMessage(client *whatsmeow.Client, body []byte) {
 	payload := NewSendMessagePayload()
 	err := json.Unmarshal(body, &payload)
-	failOnErrorWithTransaction(err, payload.TransactionId)
+	failOnError(err, "Error unmarshalling payload")
 
-	recipientJID := types.NewJID(payload.RecipientNumber, types.DefaultUserServer)
-
-	recipientJIDString := recipientJID.String()
+	recipientJID := types.NewJID(payload.PhoneNumber, types.DefaultUserServer)
 
 	msg := &waE2E.Message{
 		ExtendedTextMessage: &waE2E.ExtendedTextMessage{
 			Text: proto.String(payload.MessageBody),
-			ContextInfo: &waE2E.ContextInfo{
-				StanzaID:    proto.String(payload.QuotedMessageID),
-				Participant: &recipientJIDString,
-			},
 		},
 	}
 
-	logWithTransaction(payload.TransactionId, "INFO", "Sending message")
-
 	_, err = client.SendMessage(context.Background(), recipientJID, msg)
 
-	failOnErrorWithTransaction(err, payload.TransactionId)
+	failOnError(err, "Error sending message")
 }
 
 func initRabbitMQ() *amqp.Channel {
@@ -141,26 +129,20 @@ func messageReceiveHandler(evt interface{}) {
 			return
 		}
 
-		payload := NewReceiveMessagePayload()
-		payload.MessageType = "text"
-		payload.SenderNumber = evt.Info.Sender.User
-		payload.MessageId = evt.Info.ID
+		payload := NewProcessMessagePayload()
+		payload.Payload.PhoneNumber = evt.Info.SenderAlt.User
+		payload.Payload.MessageId = evt.Info.ID
 
 		if evt.Message.Conversation != nil {
-			payload.MessageBody = *evt.Message.Conversation
+			payload.Payload.MessageBody = *evt.Message.Conversation
 		} else if evt.Message.ExtendedTextMessage != nil {
-			payload.MessageBody = evt.Message.ExtendedTextMessage.GetText()
-			if evt.Message.ExtendedTextMessage.ContextInfo != nil {
-				if evt.Message.ExtendedTextMessage.ContextInfo.StanzaID != nil {
-					payload.QuotedMessageID = *evt.Message.ExtendedTextMessage.ContextInfo.StanzaID
-				}
-			}
+			payload.Payload.MessageBody = evt.Message.ExtendedTextMessage.GetText()
 		}
 
-		logWithTransaction(payload.TransactionId, "INFO", "Received message from "+payload.SenderNumber)
+		payload.Payload.Timestamp = evt.Info.Timestamp.Format(time.RFC3339)
 
 		msgData, err := json.Marshal(payload)
-		failOnErrorWithTransaction(err, payload.TransactionId)
+		failOnError(err, "Error marshalling payload")
 
 		err = rabbitMQChannel.Publish(
 			"",
@@ -172,17 +154,17 @@ func messageReceiveHandler(evt interface{}) {
 				Body:        msgData,
 			},
 		)
-		failOnErrorWithTransaction(err, payload.TransactionId)
+		failOnError(err, "Error publishing message")
 	}
 }
 
 func main() {
 	dbLog := waLog.Stdout("Database", "DEBUG", true)
 
-	container, err := sqlstore.New("sqlite3", "file:storage/wadb.db?_foreign_keys=on", dbLog)
+	container, err := sqlstore.New(context.Background(), "sqlite3", "file:storage/wadb.db?_foreign_keys=on", dbLog)
 	failOnError(err, "Error creating db container")
 
-	deviceStore, err := container.GetFirstDevice()
+	deviceStore, err := container.GetFirstDevice(context.Background())
 	failOnError(err, "Error getting device")
 
 	clientLog := waLog.Stdout("Client", "INFO", true)
