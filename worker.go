@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -98,6 +99,7 @@ func setUpRabbitMQConsumer(channel *amqp.Channel) <-chan amqp.Delivery {
 func handleSendWhatsappMessage(client *whatsmeow.Client, body []byte) {
 	payload := NewSendMessagePayload()
 	err := json.Unmarshal(body, &payload)
+	fmt.Printf("Got a request to send message. Payload: %v", payload)
 	failOnError(err, "Error unmarshalling payload")
 
 	recipientJID := types.NewJID(payload.PhoneNumber, types.DefaultUserServer)
