@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -106,7 +107,7 @@ func handleSendWhatsappMessage(client *whatsmeow.Client, body []byte) {
 		log.Printf("ERROR: Failed to unmarshal payload: %v", err)
 		return
 	}
-	
+
 	log.Printf("Got a request to send message. Payload: %+v", payload)
 
 	recipientJID := types.NewJID(payload.PhoneNumber, types.DefaultUserServer)
@@ -122,7 +123,7 @@ func handleSendWhatsappMessage(client *whatsmeow.Client, body []byte) {
 		log.Printf("ERROR: Failed to send message: %v", err)
 		return
 	}
-	
+
 	log.Printf("Successfully sent message. Response: %+v", resp)
 }
 
@@ -142,17 +143,24 @@ func initRabbitMQ() *amqp.Channel {
 func messageReceiveHandler(evt interface{}) {
 	switch evt := evt.(type) {
 	case *events.Message:
-		log.Printf("Received WhatsApp message event from: %s, IsFromMe: %v, IsGroup: %v, Type: %s", 
-			evt.Info.SenderAlt.User, evt.Info.IsFromMe, evt.Info.IsGroup, evt.Info.Type)
-		
+		var phoneNumber string
+		if strings.Contains(evt.Info.Sender.Server, "lid") {
+			phoneNumber = evt.Info.SenderAlt.User
+		} else {
+			phoneNumber = evt.Info.Sender.User
+		}
+
+		log.Printf("Received WhatsApp message event from: %s, IsFromMe: %v, IsGroup: %v, Type: %s",
+			phoneNumber, evt.Info.IsFromMe, evt.Info.IsGroup, evt.Info.Type)
+
 		if evt.Info.IsFromMe || evt.Info.IsGroup || evt.Info.Type != "text" {
-			log.Printf("Skipping message (IsFromMe: %v, IsGroup: %v, Type: %s)", 
+			log.Printf("Skipping message (IsFromMe: %v, IsGroup: %v, Type: %s)",
 				evt.Info.IsFromMe, evt.Info.IsGroup, evt.Info.Type)
 			return
 		}
 
 		payload := NewProcessMessagePayload()
-		payload.Payload.PhoneNumber = evt.Info.SenderAlt.User
+		payload.Payload.PhoneNumber = phoneNumber
 		payload.Payload.MessageId = evt.Info.ID
 
 		if evt.Message.Conversation != nil {
@@ -190,14 +198,14 @@ func messageReceiveHandler(evt interface{}) {
 
 func main() {
 	log.Println("Starting WhatsApp Worker...")
-	
+
 	// Validate environment variables
 	if amqpHost == "" || amqpPort == "" || amqpUser == "" || amqpPassword == "" {
 		log.Fatal("Missing required environment variables: RABBITMQ_HOST, RABBITMQ_PORT, RABBITMQ_USER, RABBITMQ_PASSWORD")
 	}
-	
+
 	log.Printf("RabbitMQ Config - Host: %s, Port: %s, User: %s", amqpHost, amqpPort, amqpUser)
-	
+
 	dbLog := waLog.Stdout("Database", "DEBUG", true)
 
 	log.Println("Initializing SQLite database...")
@@ -260,7 +268,7 @@ func main() {
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 	<-c
-	
+
 	log.Println("Received shutdown signal, cleaning up...")
 	client.Disconnect()
 	log.Println("WhatsApp Worker stopped")
